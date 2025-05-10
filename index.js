@@ -38,7 +38,7 @@ const upload = multer({
 });
 
 // Подключение к MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/boosty-clone', {
+mongoose.connect('mongodb+srv://studently_user:<db_password>@cluster0.et1l47v.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0/boosty-clone', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 }).then(() => console.log('MongoDB подключен'))
