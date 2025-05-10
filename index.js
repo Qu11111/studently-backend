@@ -169,7 +169,7 @@ app.post('/api/auth/login', async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 });
-
+app.get('/ping', (req, res) => res.send('OK'));
 // Получение данных текущего пользователя
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
