@@ -14,14 +14,29 @@ app.use(express.json());
 // Статическая папка для загрузок
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
+// Настройка Cloudinary
+cloudinary.config({
+  cloud_name: 'dmawshrng',
+  api_key: '442788134913747',
+  api_secret: 'FWAIH_YN5KpwEwqiTQ7ArAY8F3o',
+});
 // Настройка multer
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/');
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}${ext}`);
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'studently/uploads',
+    allowed_formats: ['jpg', 'png', 'mp4', 'webm'],
+    unique_filename: false, // Отключаем добавление случайного суффикса
+    overwrite: true, // Перезаписываем файлы с одинаковыми именами
+    public_id: (req, file) => {
+      const ext = path.extname(file.originalname); // Получаем расширение
+      const name = file.originalname.replace(ext, ''); // Убираем расширение из имени
+      return name; // Используем оригинальное имя файла как public_id
+    },
   },
 });
 
@@ -36,7 +51,6 @@ const upload = multer({
     }
   },
 });
-
 // Подключение к MongoDB
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/boosty-clone', {
   useNewUrlParser: true,
@@ -219,7 +233,7 @@ app.post('/api/upload/avatar', authMiddleware, upload.single('avatar'), async (r
       console.log('POST /api/upload/avatar: Пользователь не найден, userId:', req.userId);
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
-    user.avatar = `/uploads/${req.file.filename}`;
+    user.avatar = req.file.path; // URL от Cloudinary
     await user.save();
     res.json({ avatar: user.avatar });
   } catch (error) {
@@ -236,7 +250,7 @@ app.post('/api/upload/cover', authMiddleware, upload.single('cover'), async (req
       console.log('POST /api/upload/cover: Пользователь не найден, userId:', req.userId);
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
-    user.cover = `/uploads/${req.file.filename}`;
+    user.cover = req.file.path; // URL от Cloudinary
     await user.save();
     res.json({ cover: user.cover });
   } catch (error) {
@@ -408,7 +422,7 @@ app.get('/api/users/:id/subscriptions', async (req, res) => {
 app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res) => {
   try {
     const { title, content, subscriptionLevel } = req.body;
-    const media = req.files.map(file => `/uploads/${file.filename}`);
+    const media = req.files.map(file => file.path); // URLs от Cloudinary
     const post = new Post({
       title,
       content,
