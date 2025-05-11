@@ -263,7 +263,8 @@ app.post('/api/upload/cover', authMiddleware, upload.single('cover'), async (req
 app.post('/api/subscriptions', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     const { name, price, description } = req.body;
-    const image = req.file ? `/uploads/${req.file.filename}` : 'https://via.placeholder.com/150';
+    const image = req.file ? req.file.path : 'https://via.placeholder.com/150'; // Используем Cloudinary URL
+    console.log('Uploaded subscription image URL:', image); // Добавь отладку
     const subscriptionLevel = new SubscriptionLevel({
       name,
       price,
@@ -297,7 +298,8 @@ app.put('/api/subscriptions/:id', authMiddleware, upload.single('image'), async 
     subscriptionLevel.price = price || subscriptionLevel.price;
     subscriptionLevel.description = description || subscriptionLevel.description;
     if (req.file) {
-      subscriptionLevel.image = `/uploads/${req.file.filename}`;
+      subscriptionLevel.image = req.file.path; // Используем Cloudinary URL
+      console.log('Updated subscription image URL:', subscriptionLevel.image);
     }
 
     await subscriptionLevel.save();
@@ -458,7 +460,8 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
     post.content = content || post.content;
     post.subscriptionLevel = subscriptionLevel === '' ? null : subscriptionLevel || post.subscriptionLevel;
     if (req.files.length > 0) {
-      post.media = req.files.map(file => `/uploads/${file.filename}`);
+      post.media = req.files.map(file => file.path); // Используем Cloudinary URL
+      console.log('Updated post media URLs:', post.media);
     }
 
     await post.save();
