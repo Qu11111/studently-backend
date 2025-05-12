@@ -6,6 +6,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const WebSocket = require('ws');
+const fs = require('fs').promises; // Для удаления временных файлов
 
 const app = express();
 app.use(cors());
@@ -24,25 +25,14 @@ cloudinary.config({
   api_secret: 'FWAIH_YN5KpwEwqiTQ7ArAY8F3o',
 });
 
-// Настройка multer
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'studently/uploads',
-    allowed_formats: ['jpg', 'png', 'mp4', 'webm'],
-    unique_filename: false, // Отключаем добавление случайного суффикса
-    overwrite: true, // Перезаписываем файлы с одинаковыми именами
-    public_id: (req, file) => {
-      const ext = path.extname(file.originalname); // Получаем расширение
-      const name = file.originalname.replace(ext, ''); // Убираем расширение из имени
-      return name; // Используем оригинальное имя файла как public_id
-    },
-    timeout: 120000, // Увеличиваем таймаут до 120 секунд
-  },
-});
-
+// Настройка multer для локального хранения временных файлов
 const upload = multer({
-  storage,
+  storage: multer.diskStorage({
+    destination: 'uploads/',
+    filename: (req, file, cb) => {
+      cb(null, `${Date.now()}-${file.originalname}`);
+    },
+  }),
   limits: { fileSize: 200 * 1024 * 1024 }, // Увеличиваем лимит до 200 МБ
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'video/mp4', 'video/webm'];
@@ -70,8 +60,8 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   description: { type: String, default: '' },
   purchasedSubscriptions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'SubscriptionLevel' }],
-  avatar: { type: String, default: 'https://placehold.co/150x150' }, // Обновляем placeholder
-  cover: { type: String, default: 'https://placehold.co/1200x300' }, // Обновляем placeholder
+  avatar: { type: String, default: 'https://placehold.co/150x150' },
+  cover: { type: String, default: 'https://placehold.co/1200x300' },
   credits: { type: Number, default: 1000 },
 });
 
@@ -81,7 +71,7 @@ const User = mongoose.model('User', userSchema);
 const subscriptionLevelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
-  image: { type: String, default: 'https://placehold.co/150x150' }, // Обновляем placeholder
+  image: { type: String, default: 'https://placehold.co/150x150' },
   description: { type: String, default: '' },
   creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 });
@@ -144,6 +134,12 @@ const authMiddleware = (req, res, next) => {
     res.status(401).json({ error: 'Неверный токен' });
   }
 };
+
+// Глобальный обработчик ошибок
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err.message, err.stack);
+  res.status(500).json({ error: `Internal Server Error: ${err.message}` });
+});
 
 // Регистрация
 app.post('/api/auth/register', async (req, res) => {
@@ -240,11 +236,25 @@ app.post('/api/upload/avatar', authMiddleware, upload.single('avatar'), async (r
       console.log('POST /api/upload/avatar: Пользователь не найден, userId:', req.userId);
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
-    user.avatar = req.file.path; // URL от Cloudinary
+
+    // Загружаем файл на Cloudinary
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: 'studently/uploads',
+      resource_type: 'image',
+      timeout: 120000,
+    });
+
+    // Удаляем временный файл
+    await fs.unlink(req.file.path);
+
+    user.avatar = result.secure_url;
     await user.save();
     res.json({ avatar: user.avatar });
   } catch (error) {
     console.log('POST /api/upload/avatar: Ошибка:', error.message, error.stack);
+    if (req.file && req.file.path) {
+      await fs.unlink(req.file.path).catch((err) => console.error('Failed to delete temp file:', err));
+    }
     res.status(400).json({ error: error.message });
   }
 });
@@ -257,11 +267,25 @@ app.post('/api/upload/cover', authMiddleware, upload.single('cover'), async (req
       console.log('POST /api/upload/cover: Пользователь не найден, userId:', req.userId);
       return res.status(404).json({ error: 'Пользователь не найден' });
     }
-    user.cover = req.file.path; // URL от Cloudinary
+
+    // Загружаем файл на Cloudinary
+    const result = await cloudinary.uploader.upload(req.file.path, {
+      folder: 'studently/uploads',
+      resource_type: 'image',
+      timeout: 120000,
+    });
+
+    // Удаляем временный файл
+    await fs.unlink(req.file.path);
+
+    user.cover = result.secure_url;
     await user.save();
     res.json({ cover: user.cover });
   } catch (error) {
     console.log('POST /api/upload/cover: Ошибка:', error.message, error.stack);
+    if (req.file && req.file.path) {
+      await fs.unlink(req.file.path).catch((err) => console.error('Failed to delete temp file:', err));
+    }
     res.status(400).json({ error: error.message });
   }
 });
@@ -270,7 +294,16 @@ app.post('/api/upload/cover', authMiddleware, upload.single('cover'), async (req
 app.post('/api/subscriptions', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     const { name, price, description } = req.body;
-    const image = req.file ? req.file.path : 'https://placehold.co/150x150'; // Используем Cloudinary URL
+    let image = 'https://placehold.co/150x150';
+    if (req.file) {
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        folder: 'studently/uploads',
+        resource_type: 'image',
+        timeout: 120000,
+      });
+      image = result.secure_url;
+      await fs.unlink(req.file.path);
+    }
     console.log('Uploaded subscription image URL:', image);
     const subscriptionLevel = new SubscriptionLevel({
       name,
@@ -283,6 +316,9 @@ app.post('/api/subscriptions', authMiddleware, upload.single('image'), async (re
     res.status(201).json({ message: 'Уровень подписки создан', subscriptionLevel });
   } catch (error) {
     console.log('POST /api/subscriptions: Ошибка:', error.message, error.stack);
+    if (req.file && req.file.path) {
+      await fs.unlink(req.file.path).catch((err) => console.error('Failed to delete temp file:', err));
+    }
     res.status(400).json({ error: error.message });
   }
 });
@@ -305,14 +341,23 @@ app.put('/api/subscriptions/:id', authMiddleware, upload.single('image'), async 
     subscriptionLevel.price = price || subscriptionLevel.price;
     subscriptionLevel.description = description || subscriptionLevel.description;
     if (req.file) {
-      subscriptionLevel.image = req.file.path;
+      const result = await cloudinary.uploader.upload(req.file.path, {
+        folder: 'studently/uploads',
+        resource_type: 'image',
+        timeout: 120000,
+      });
+      subscriptionLevel.image = result.secure_url;
       console.log('Updated subscription image URL:', subscriptionLevel.image);
+      await fs.unlink(req.file.path);
     }
 
     await subscriptionLevel.save();
     res.json({ message: 'Подписка обновлена', subscriptionLevel });
   } catch (error) {
     console.log('PUT /api/subscriptions/:id: Ошибка:', error.message, error.stack);
+    if (req.file && req.file.path) {
+      await fs.unlink(req.file.path).catch((err) => console.error('Failed to delete temp file:', err));
+    }
     res.status(400).json({ error: error.message });
   }
 });
@@ -436,6 +481,11 @@ app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res
     let mediaUrls = [];
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
+        if (!file.size) {
+          console.log('POST /api/posts: Размер файла не определён:', file);
+          return res.status(400).json({ error: 'Размер файла не определён' });
+        }
+
         if (file.size > 200 * 1024 * 1024) {
           console.log('POST /api/posts: Файл превышает лимит в 200 МБ, размер:', file.size);
           return res.status(400).json({ error: 'File size exceeds 200 MB limit' });
@@ -447,8 +497,24 @@ app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res
           return res.status(400).json({ error: 'Unsupported video format. Use MP4 or WebM' });
         }
 
-        console.log(`Uploading file: ${file.originalname}, type: ${file.mimetype}, size: ${file.size} bytes`);
-        mediaUrls.push(file.path); // URL от Cloudinary
+        console.log(`Uploading file to Cloudinary: ${file.path}, type: ${file.mimetype}, size: ${file.size} bytes`);
+        const resourceType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+        const result = await cloudinary.uploader.upload(file.path, {
+          folder: 'studently/uploads',
+          resource_type: resourceType,
+          timeout: 120000,
+        });
+
+        if (!result.secure_url) {
+          console.log('POST /api/posts: Cloudinary upload failed:', result);
+          return res.status(500).json({ error: 'Failed to upload file to Cloudinary' });
+        }
+
+        console.log(`Successfully uploaded file to Cloudinary: ${result.secure_url}`);
+        mediaUrls.push(result.secure_url);
+
+        // Удаляем временный файл
+        await fs.unlink(file.path);
       }
     }
 
@@ -465,7 +531,14 @@ app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res
     res.status(201).json({ message: 'Пост создан', post: populatedPost });
   } catch (error) {
     console.log('POST /api/posts: Ошибка:', error.message, error.stack);
-    res.status(400).json({ error: error.message });
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        if (file.path) {
+          await fs.unlink(file.path).catch((err) => console.error('Failed to delete temp file:', err));
+        }
+      }
+    }
+    res.status(500).json({ error: `Failed to create post: ${error.message}` });
   }
 });
 
@@ -486,6 +559,11 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
     let mediaUrls = [];
     if (req.files && req.files.length > 0) {
       for (const file of req.files) {
+        if (!file.size) {
+          console.log('PUT /api/posts/:id: Размер файла не определён:', file);
+          return res.status(400).json({ error: 'Размер файла не определён' });
+        }
+
         if (file.size > 200 * 1024 * 1024) {
           console.log('PUT /api/posts/:id: Файл превышает лимит в 200 МБ, размер:', file.size);
           return res.status(400).json({ error: 'File size exceeds 200 MB limit' });
@@ -497,8 +575,24 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
           return res.status(400).json({ error: 'Unsupported video format. Use MP4 or WebM' });
         }
 
-        console.log(`Uploading file: ${file.originalname}, type: ${file.mimetype}, size: ${file.size} bytes`);
-        mediaUrls.push(file.path);
+        console.log(`Uploading file to Cloudinary: ${file.path}, type: ${file.mimetype}, size: ${file.size} bytes`);
+        const resourceType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+        const result = await cloudinary.uploader.upload(file.path, {
+          folder: 'studently/uploads',
+          resource_type: resourceType,
+          timeout: 120000,
+        });
+
+        if (!result.secure_url) {
+          console.log('PUT /api/posts/:id: Cloudinary upload failed:', result);
+          return res.status(500).json({ error: 'Failed to upload file to Cloudinary' });
+        }
+
+        console.log(`Successfully uploaded file to Cloudinary: ${result.secure_url}`);
+        mediaUrls.push(result.secure_url);
+
+        // Удаляем временный файл
+        await fs.unlink(file.path);
       }
       post.media = mediaUrls;
     }
@@ -512,7 +606,14 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
     res.json({ message: 'Пост обновлён', post: populatedPost });
   } catch (error) {
     console.log('PUT /api/posts/:id: Ошибка:', error.message, error.stack);
-    res.status(400).json({ error: error.message });
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        if (file.path) {
+          await fs.unlink(file.path).catch((err) => console.error('Failed to delete temp file:', err));
+        }
+      }
+    }
+    res.status(500).json({ error: `Failed to update post: ${error.message}` });
   }
 });
 
