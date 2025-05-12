@@ -27,17 +27,21 @@ cloudinary.config({
 // Настройка multer
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: {
-    folder: 'studently/uploads',
-    allowed_formats: ['jpg', 'png', 'mp4', 'webm'],
-    unique_filename: false, // Отключаем добавление случайного суффикса
-    overwrite: true, // Перезаписываем файлы с одинаковыми именами
-    public_id: (req, file) => {
-      const ext = path.extname(file.originalname); // Получаем расширение
-      const name = file.originalname.replace(ext, ''); // Убираем расширение из имени
-      return name; // Используем оригинальное имя файла как public_id
-    },
-    timeout: 120000, // Увеличиваем таймаут до 120 секунд
+  params: async (req, file) => {
+    console.log(`Processing file: ${file.originalname}, type: ${file.mimetype}, size: ${file.size} bytes`);
+    return {
+      folder: 'studently/uploads',
+      allowed_formats: ['jpg', 'png', 'mp4', 'webm'],
+      unique_filename: false,
+      overwrite: true,
+      public_id: (req, file) => {
+        const ext = path.extname(file.originalname);
+        const name = file.originalname.replace(ext, '');
+        return name;
+      },
+      resource_type: file.mimetype.startsWith('video/') ? 'video' : 'image', // Явно указываем тип ресурса
+      timeout: 120000, // Увеличиваем таймаут до 120 секунд
+    };
   },
 });
 
@@ -70,8 +74,8 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   description: { type: String, default: '' },
   purchasedSubscriptions: [{ type: mongoose.Schema.Types.ObjectId, ref: 'SubscriptionLevel' }],
-  avatar: { type: String, default: 'https://placehold.co/150x150' }, // Обновляем placeholder
-  cover: { type: String, default: 'https://placehold.co/1200x300' }, // Обновляем placeholder
+  avatar: { type: String, default: 'https://placehold.co/150x150' },
+  cover: { type: String, default: 'https://placehold.co/1200x300' },
   credits: { type: Number, default: 1000 },
 });
 
@@ -81,7 +85,7 @@ const User = mongoose.model('User', userSchema);
 const subscriptionLevelSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
-  image: { type: String, default: 'https://placehold.co/150x150' }, // Обновляем placeholder
+  image: { type: String, default: 'https://placehold.co/150x150' },
   description: { type: String, default: '' },
   creatorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 });
@@ -144,6 +148,12 @@ const authMiddleware = (req, res, next) => {
     res.status(401).json({ error: 'Неверный токен' });
   }
 };
+
+// Глобальный обработчик ошибок
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err.message, err.stack);
+  res.status(500).json({ error: `Internal Server Error: ${err.message}` });
+});
 
 // Регистрация
 app.post('/api/auth/register', async (req, res) => {
@@ -270,7 +280,7 @@ app.post('/api/upload/cover', authMiddleware, upload.single('cover'), async (req
 app.post('/api/subscriptions', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     const { name, price, description } = req.body;
-    const image = req.file ? req.file.path : 'https://placehold.co/150x150'; // Используем Cloudinary URL
+    const image = req.file ? req.file.path : 'https://placehold.co/150x150';
     console.log('Uploaded subscription image URL:', image);
     const subscriptionLevel = new SubscriptionLevel({
       name,
@@ -447,7 +457,7 @@ app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res
           return res.status(400).json({ error: 'Unsupported video format. Use MP4 or WebM' });
         }
 
-        console.log(`Uploading file: ${file.originalname}, type: ${file.mimetype}, size: ${file.size} bytes`);
+        console.log(`Successfully uploaded file to Cloudinary: ${file.path}`);
         mediaUrls.push(file.path); // URL от Cloudinary
       }
     }
@@ -465,7 +475,7 @@ app.post('/api/posts', authMiddleware, upload.array('media', 5), async (req, res
     res.status(201).json({ message: 'Пост создан', post: populatedPost });
   } catch (error) {
     console.log('POST /api/posts: Ошибка:', error.message, error.stack);
-    res.status(400).json({ error: error.message });
+    res.status(500).json({ error: `Failed to create post: ${error.message}` });
   }
 });
 
@@ -497,7 +507,7 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
           return res.status(400).json({ error: 'Unsupported video format. Use MP4 or WebM' });
         }
 
-        console.log(`Uploading file: ${file.originalname}, type: ${file.mimetype}, size: ${file.size} bytes`);
+        console.log(`Successfully uploaded file to Cloudinary: ${file.path}`);
         mediaUrls.push(file.path);
       }
       post.media = mediaUrls;
@@ -512,7 +522,7 @@ app.put('/api/posts/:id', authMiddleware, upload.array('media', 5), async (req, 
     res.json({ message: 'Пост обновлён', post: populatedPost });
   } catch (error) {
     console.log('PUT /api/posts/:id: Ошибка:', error.message, error.stack);
-    res.status(400).json({ error: error.message });
+    res.status(500).json({ error: `Failed to update post: ${error.message}` });
   }
 });
 
